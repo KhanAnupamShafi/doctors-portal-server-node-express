@@ -4,10 +4,18 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 require("dotenv").config();
 const { MongoClient } = require("mongodb");
+const ObjectId = require("mongodb").ObjectId;
+const fileUpload = require("express-fileupload");
 
 const port = process.env.PORT || 5000;
 
+//Stripe Init
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+
+//JWT Token Firebase
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
 //firebase admin init
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -15,8 +23,9 @@ admin.initializeApp({
 
 app.use(cors());
 app.use(express.json());
+app.use(fileUpload());
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.swu9d.mongodb.net/myFirstDatabase?retryWrites=true&w=majority`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.cyduv.mongodb.net/myFirstDatabase?retryWrites=true&w=majority`;
 
 const client = new MongoClient(uri, {
   useNewUrlParser: true,
@@ -41,6 +50,7 @@ async function run() {
     const database = client.db("doctors_portal");
     const appointmentsCollection = database.collection("appointments");
     const usersCollection = database.collection("users");
+    const doctorsCollection = database.collection("doctors");
 
     app.get("/appointments", verifyToken, async (req, res) => {
       const email = req.query.email;
@@ -70,10 +80,39 @@ async function run() {
       res.json({ admin: isAdmin });
     });
 
+    app.get("/appointments/:appointmentId", async (req, res) => {
+      const id = req.params.appointmentId;
+      const query = { _id: ObjectId(id) };
+      const result = await appointmentsCollection.findOne(query);
+      res.json(result);
+    });
+
     app.post("/users", async (req, res) => {
       const user = req.body;
       const result = await usersCollection.insertOne(user);
       console.log(result);
+      res.json(result);
+    });
+
+    app.get("/doctors", async (req, res) => {
+      const cursor = doctorsCollection.find({});
+      const result = await cursor.toArray();
+      res.json(result);
+    });
+    app.post("/doctors", async (req, res) => {
+      const doctorsName = req.body.name;
+      const doctorsEmail = req.body.email;
+      const doctorsImage = req.files.image;
+      const picData = doctorsImage.data;
+      const bufferImage = Buffer.from(picData.toString("base64"), "base64");
+      //Buffers can be used for taking a string or piece of data and doing Base64 encoding of the result. For example:
+      const doctor = {
+        image: bufferImage,
+        name: doctorsName,
+        email: doctorsEmail,
+      };
+      const result = await doctorsCollection.insertOne(doctor);
+      // console.log(result);
       res.json(result);
     });
 
@@ -108,6 +147,32 @@ async function run() {
           .status(403)
           .json({ message: "you do not have access to make admin" });
       }
+    });
+
+    app.post("/create-payment-intent", async (req, res) => {
+      console.log(req.body);
+      const paymentInfo = req.body;
+      const amount = paymentInfo.cost * 100;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.json({ clientSecret: paymentIntent.client_secret });
+    });
+
+    app.put("/appointments/:id", async (req, res) => {
+      const id = req.params.id;
+      const payment = req.body;
+      console.log(payment);
+      const filter = { _id: ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          payment: payment,
+        },
+      };
+      const result = appointmentsCollection.updateOne(filter, updateDoc);
+      res.json(result);
     });
   } finally {
     // await client.close();
